@@ -4,6 +4,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use nexdb::{Document, NexDb, NexDbResult};
+use nexdb::migrate;
 use nexdb::server;
 
 fn usage() -> ! {
@@ -26,7 +27,10 @@ fn usage() -> ! {
     eprintln!("  nexdb export <db> <col> <file.json>    Export JSON");
     eprintln!("  nexdb import-csv <db> <col> <file.csv> Import CSV");
     eprintln!("  nexdb export-csv <db> <col> <file.csv> Export CSV");
-    eprintln!("  nexdb completions <shell>              Generate shell completions");
+    eprintln!("  nexdb migrate <action> [args]           Migrate data (dump/restore/copy/to-sql/import)");
+    eprintln!("  nexdb clean <db>                        Remove database files");
+    eprintln!("  nexdb clean --all <dir>                 Remove all .nexdb files in a directory");
+    eprintln!("  nexdb completions <shell>               Generate shell completions");
     eprintln!();
     eprintln!("SHELLS: bash, zsh, fish, powershell, elvish");
     std::process::exit(1);
@@ -160,11 +164,92 @@ async fn main() -> NexDbResult<()> {
             println!(r#"{{"ok":true,"exported_to":"{}"}}"#, args[4]);
             Ok(())
         }
+        "migrate" => run_migrate(&args).await,
+        "clean" => run_clean(&args).await,
         "completions" => {
             if args.len() < 3 { usage(); }
             generate_completions(&args[2])
         }
         _ => usage(),
+    }
+}
+
+async fn run_migrate(args: &[String]) -> NexDbResult<()> {
+    if args.len() < 3 {
+        eprintln!("nexdb migrate <action> [args...]");
+        eprintln!();
+        eprintln!("ACTIONS:");
+        eprintln!("  dump <db> <dir>              Dump all collections to JSON files");
+        eprintln!("  restore <db> <dir>            Restore all collections from JSON files");
+        eprintln!("  copy <src> <dst>              Copy data between two databases");
+        eprintln!("  to-sql <db> <dialect>         Generate SQL dump (pg, mysql, sqlite)");
+        eprintln!("  import <db> <col> <file>      Auto-detect and import (.json/.csv/.ndjson)");
+        std::process::exit(1);
+    }
+
+    match args[2].as_str() {
+        "dump" => {
+            if args.len() < 5 { eprintln!("Usage: nexdb migrate dump <db> <dir>"); std::process::exit(1); }
+            let db = NexDb::open(&args[3]).await?;
+            let manifest = migrate::dump(&db, &args[4]).await?;
+            println!("Dumped {} collections ({} docs total)", manifest.collections.len(), manifest.total_docs);
+            Ok(())
+        }
+        "restore" => {
+            if args.len() < 5 { eprintln!("Usage: nexdb migrate restore <db> <dir>"); std::process::exit(1); }
+            let db = NexDb::open(&args[3]).await?;
+            let manifest = migrate::restore(&db, &args[4]).await?;
+            println!("Restored {} collections ({} docs total)", manifest.collections.len(), manifest.total_docs);
+            Ok(())
+        }
+        "copy" => {
+            if args.len() < 5 { eprintln!("Usage: nexdb migrate copy <src_db> <dst_db>"); std::process::exit(1); }
+            let source = NexDb::open(&args[3]).await?;
+            let target = NexDb::open(&args[4]).await?;
+            let manifest = migrate::copy(&source, &target).await?;
+            println!("Copied {} collections ({} docs total)", manifest.collections.len(), manifest.total_docs);
+            Ok(())
+        }
+        "to-sql" => {
+            if args.len() < 5 { eprintln!("Usage: nexdb migrate to-sql <db> <dialect>"); std::process::exit(1); }
+            let db = NexDb::open(&args[3]).await?;
+            let sql = migrate::to_sql(&db, &args[4]).await?;
+            println!("{}", sql);
+            Ok(())
+        }
+        "import" => {
+            if args.len() < 6 { eprintln!("Usage: nexdb migrate import <db> <col> <file>"); std::process::exit(1); }
+            let db = NexDb::open(&args[3]).await?;
+            let count = migrate::auto_import(&db, &args[4], &args[5]).await?;
+            println!("Imported {} documents", count);
+            Ok(())
+        }
+        _ => {
+            eprintln!("Unknown migrate action: {}", args[2]);
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn run_clean(args: &[String]) -> NexDbResult<()> {
+    if args.len() < 3 {
+        eprintln!("Usage: nexdb clean <db>              Remove database files");
+        eprintln!("       nexdb clean --all <dir>        Remove all .nexdb files in directory");
+        std::process::exit(1);
+    }
+
+    match args[2].as_str() {
+        "--all" => {
+            if args.len() < 4 { eprintln!("Usage: nexdb clean --all <dir>"); std::process::exit(1); }
+            let removed = migrate::clean_all(&args[3]).await?;
+            println!("Cleaned {} files", removed);
+            Ok(())
+        }
+        path => {
+            let removed = migrate::clean(path).await?;
+            println!("Cleaned {} file(s)", removed);
+            Ok(())
+        }
     }
 }
 

@@ -344,6 +344,13 @@ impl NexDb {
         Ok(count)
     }
 
+    /// Dump all docs from a single collection
+    pub async fn dump_collection(&self, name: &str) -> NexDbResult<Vec<(String, Document)>> {
+        let coll_arc = self.get_collection_arc(name).await?;
+        let coll = coll_arc.read().await;
+        Ok(coll.all_docs().map(|(k,v)| (k.clone(), v.clone())).collect())
+    }
+
     /// Dump all docs from all collections (for full backup or checkpoint)
     pub async fn dump_all_collections(&self) -> HashMap<String, Vec<(String, Document)>> {
         let collections = self.collections.read().await;
