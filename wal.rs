@@ -30,6 +30,10 @@ pub enum WalOperation {
     Update,
     #[serde(rename = "delete")]
     Delete,
+    #[serde(rename = "create_collection")]
+    CreateCollection,
+    #[serde(rename = "drop_collection")]
+    DropCollection,
 }
 
 impl WalEntry {
@@ -59,6 +63,26 @@ impl WalEntry {
             collection: collection.to_string(),
             operation: WalOperation::Delete,
             doc_id: doc_id.to_string(),
+            document: None,
+        }
+    }
+
+    pub fn new_create_collection(collection: &str) -> Self {
+        WalEntry {
+            timestamp: Utc::now().timestamp(),
+            collection: collection.to_string(),
+            operation: WalOperation::CreateCollection,
+            doc_id: String::new(),
+            document: None,
+        }
+    }
+
+    pub fn new_drop_collection(collection: &str) -> Self {
+        WalEntry {
+            timestamp: Utc::now().timestamp(),
+            collection: collection.to_string(),
+            operation: WalOperation::DropCollection,
+            doc_id: String::new(),
             document: None,
         }
     }

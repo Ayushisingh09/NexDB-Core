@@ -14,9 +14,11 @@ fn usage() -> ! {
     eprintln!("  nexdb repl <database.nexdb>            Start interactive REPL");
     eprintln!("  nexdb serve <database.nexdb> [--port N] Start TCP server");
     eprintln!("  nexdb insert <db> <col> <id> <json>    Insert a document");
+    eprintln!("  nexdb insert-auto-id <db> <col> <json> Insert with auto ID");
     eprintln!("  nexdb get <db> <col> <id>              Get a document");
     eprintln!("  nexdb update <db> <col> <id> <json>    Update a document");
     eprintln!("  nexdb delete <db> <col> <id>           Delete a document");
+    eprintln!("  nexdb find <db> <col>                  List all documents");
     eprintln!("  nexdb count <db> <col>                 Count documents");
     eprintln!("  nexdb collections <db>                 List collections");
     eprintln!("  nexdb create-collection <db> <col>     Create a collection");
@@ -67,6 +69,7 @@ async fn main() -> NexDbResult<()> {
             let db = NexDb::open(&args[2]).await?;
             let doc = Document::from_json(&args[5])?;
             db.insert(&args[3], &args[4], doc).await?;
+            db.flush().await?;
             println!(r#"{{"ok":true}}"#);
             Ok(())
         }
@@ -84,6 +87,7 @@ async fn main() -> NexDbResult<()> {
             let db = NexDb::open(&args[2]).await?;
             let doc = Document::from_json(&args[5])?;
             db.update(&args[3], &args[4], doc).await?;
+            db.flush().await?;
             println!(r#"{{"ok":true}}"#);
             Ok(())
         }
@@ -91,6 +95,7 @@ async fn main() -> NexDbResult<()> {
             if args.len() < 5 { usage(); }
             let db = NexDb::open(&args[2]).await?;
             db.delete(&args[3], &args[4]).await?;
+            db.flush().await?;
             println!(r#"{{"ok":true}}"#);
             Ok(())
         }
@@ -112,6 +117,7 @@ async fn main() -> NexDbResult<()> {
             if args.len() < 4 { usage(); }
             let db = NexDb::open(&args[2]).await?;
             db.create_collection(&args[3]).await?;
+            db.flush().await?;
             println!(r#"{{"ok":true}}"#);
             Ok(())
         }
@@ -119,7 +125,27 @@ async fn main() -> NexDbResult<()> {
             if args.len() < 4 { usage(); }
             let db = NexDb::open(&args[2]).await?;
             db.drop_collection(&args[3]).await?;
+            db.flush().await?;
             println!(r#"{{"ok":true}}"#);
+            Ok(())
+        }
+        "find" => {
+            if args.len() < 4 { usage(); }
+            let db = NexDb::open(&args[2]).await?;
+            let docs = db.find(&args[3], |_| true).await?;
+            let results: Vec<Value> = docs.into_iter()
+                .map(|(id, doc)| serde_json::json!({"id": id, "document": doc.as_value()}))
+                .collect();
+            println!("{}", serde_json::to_string(&serde_json::json!({"ok": true, "documents": results, "count": results.len()})).unwrap());
+            Ok(())
+        }
+        "insert-auto-id" => {
+            if args.len() < 5 { usage(); }
+            let db = NexDb::open(&args[2]).await?;
+            let doc = Document::from_json(&args[4])?;
+            let id = db.insert_auto_id(&args[3], doc).await?;
+            db.flush().await?;
+            println!(r#"{{"ok":true,"id":"{}"}}"#, id);
             Ok(())
         }
         "flush" => {
@@ -435,6 +461,23 @@ async fn handle_json_command(db: &NexDb, json: &str) -> Value {
         }
         "flush" => exec(db.flush().await),
         "checkpoint" => exec(db.checkpoint().await),
+        "find" => {
+            let collection = args.get("collection").and_then(|c| c.as_str()).unwrap_or("");
+            let query_json = args.get("query").cloned().unwrap_or(Value::Null);
+            let query = match nexdb::query::parse_query_from_json(collection, &query_json) {
+                Ok(q) => q,
+                Err(e) => return serde_json::json!({"ok": false, "error": e.to_string()}),
+            };
+            match db.find(collection, |doc| query.matches(doc)).await {
+                Ok(results) => {
+                    let docs: Vec<Value> = results.into_iter()
+                        .map(|(id, doc)| serde_json::json!({"id": id, "document": doc.as_value()}))
+                        .collect();
+                    serde_json::json!({"ok": true, "documents": docs, "count": docs.len()})
+                }
+                Err(e) => serde_json::json!({"ok": false, "error": e.to_string()}),
+            }
+        }
         _ => serde_json::json!({"ok": false, "error": format!("unknown command: {}", command)}),
     }
 }

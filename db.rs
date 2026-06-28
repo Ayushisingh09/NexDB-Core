@@ -69,6 +69,13 @@ impl NexDb {
                     coll.delete(&entry.doc_id).ok();
                 }
             }
+            crate::wal::WalOperation::CreateCollection => {
+                // Collection already created by or_insert_with above
+            }
+            crate::wal::WalOperation::DropCollection => {
+                drop(coll);
+                collections.remove(&entry.collection);
+            }
         }
 
         Ok(())
@@ -80,14 +87,20 @@ impl NexDb {
             return Err(NexDbError::CollectionAlreadyExists(name.to_string()));
         }
         collections.insert(name.to_string(), Arc::new(RwLock::new(Collection::new(name))));
-        Ok(())
+        drop(collections);
+        let entry = WalEntry::new_create_collection(name);
+        let mut wal = self.wal.lock().await;
+        wal.append(&entry).await
     }
 
     pub async fn drop_collection(&self, name: &str) -> NexDbResult<()> {
         let mut collections = self.collections.write().await;
         collections.remove(name)
             .ok_or_else(|| NexDbError::CollectionNotFound(name.to_string()))?;
-        Ok(())
+        drop(collections);
+        let entry = WalEntry::new_drop_collection(name);
+        let mut wal = self.wal.lock().await;
+        wal.append(&entry).await
     }
 
     pub async fn list_collections(&self) -> Vec<String> {
